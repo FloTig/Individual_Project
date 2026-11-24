@@ -2,25 +2,27 @@
 
 A web app for two people to define household chores, see what's due and tick chores off. It runs mainly on two iPhones, installed to the home screen.
 
+**Status:** the core app (milestone M1) is built and runs locally. Next is hosting (M0's deploy step), then notifications (M2). See section 11.
+
 ---
 
 ## 1. What you asked for
 
 | Topic | Answer |
 |---|---|
-| Devices | Phones first (both iPhone). Installable web app (PWA). Laptops work too. |
-| Scheduling | Two types: **calendar** (bins every Tuesday, 1st of the month) and **interval** (N days after it was last done). |
-| Assignment | Per chore: **fixed** (always mine / always hers), **take turns**, or **either of us**. |
-| Data | Shared and synced between both phones. Free hosted service. |
+| Devices | Phones first (both iPhone). Installable web app. Laptops work too. |
+| Scheduling | Two types: **fixed schedule** (bins every Tuesday, the 1st of the month) and **after last done** (N days/weeks/months after it was last done). |
+| Assignment | Per chore: **one person** (always mine / always hers), **take turns**, or **either of us**. |
+| Data | Shared between both phones through the app's own server. |
 | Reminders | A push notification **per chore when it's due**. |
 | Overdue | Shows as overdue (red) until done, with a **skip** button that moves it to the next date. |
 | Tracking | **History**, plus **points and streaks** as a **friendly competition** with a weekly winner. |
 | Cooking | A special daily chore. Logging what you made feeds a **meal history**, and the app **suggests meals** you like but haven't had in a while. Seasonal products and other ideas come later. |
 | Login | Own account each. |
-| Your role | Claude builds it; you decide on design, features and packages (see section 10). |
-| Stack | React + Vite + TypeScript, English UI, code in `chores-app/` on this branch for now. |
+| Stack | **Python Dash + dash-mantine-components**, SQLite. English UI. Code in `chores-app/` on this branch for now. |
+| Your role | Claude builds it; you review and decide on design, features and packages. |
 
-**Why not iCloud:** a web app can't use iCloud Drive as a database. The only Apple option is CloudKit JS, which needs a paid developer account (€99/yr), and sharing data between two Apple IDs is fiddly to set up. Supabase's free tier gives a database, login and live sync for €0.
+**Why not iCloud:** a web app can't use iCloud Drive as a database. The only Apple option is CloudKit JS, which needs a paid developer account (€99/yr), and sharing data between two Apple IDs is fiddly to set up.
 
 **Why not Apple Reminders:** shared lists can do calendar repeats and assignees, but not "N days after last done", taking turns, points or meal suggestions.
 
@@ -29,7 +31,7 @@ A web app for two people to define household chores, see what's due and tick cho
 ## 2. Not in v1
 
 - Multiple households, inviting other people, roles. There are exactly two users.
-- Offline mode. The app needs a connection; caching can come later.
+- Offline mode.
 - A native iOS app or App Store release.
 - Recipes, shopping lists and ingredients (see the backlog).
 
@@ -38,123 +40,128 @@ A web app for two people to define household chores, see what's due and tick cho
 ## 3. Architecture
 
 ```
-iPhone (home-screen PWA)
-   │  supabase-js (HTTPS, realtime websocket)
+iPhone (home-screen web app)
+   │  HTTPS
    ▼
-Supabase (free tier)
-   ├── Postgres: tables + Row Level Security
-   ├── Auth: 2 accounts, sign-ups disabled afterwards
-   ├── pg_cron: every 5 min → calls Edge Function
-   └── Edge Function "notify": finds due chores → sends Web Push
-                                      │
-                                      ▼
-                           Apple Push service → iPhone
-Static frontend hosting (free): Netlify / Vercel / Cloudflare Pages
+One Python process (Dash on Flask)
+   ├── app.py       login page, screens, callbacks
+   ├── db.py        SQLite file (chores.db)
+   └── schedule.py  due-date maths (tested)
+
+M2: a scheduler calls /cron/notify every ~5 min → pywebpush → Apple push service → iPhone
 ```
 
-- **There's no backend server of our own.** The frontend talks to Supabase directly, and the database rules (RLS) handle security.
-- **Security model:** create the two accounts, then **turn off sign-ups** in Supabase. Each table gets one RLS policy: any logged-in user may read and write. With only two accounts that's enough, and it's the main security boundary, so it has to be in place before the app goes online.
-- **Live sync:** Supabase Realtime, so a chore she ticks off disappears from your screen too.
+- **No separate database service.** One SQLite file holds everything. Backing up means copying that file.
+- **Security:**
+  - Every page and callback requires login (a Flask `before_request` check).
+  - Passwords are stored hashed (werkzeug, which ships with Dash).
+  - The login cookie is signed and lasts a year, so you stay logged in on your phone.
+  - There's no sign-up page: logins are created on the server with `python db.py adduser NAME`.
+- **Sync between phones:** the screen refreshes after every action and every 60 seconds. That's plenty for two people.
 
 ---
 
-## 4. Data model (first draft)
+## 4. Data model
+
+The tables that exist now (see `db.py`):
 
 ```
-profiles        id (= auth user id), name
+users        id, name (unique), pw_hash
 
-chores          id, title, notes
-                kind            'normal' | 'meal'
-                schedule_type   'calendar' | 'interval'
-                every           int      -- e.g. 1, 2
-                unit            'day' | 'week' | 'month'   (calendar only)
-                weekday         0-6      (calendar + week, optional)
-                month_day       1-31     (calendar + month, optional; clamps to month end)
-                interval_days   int      (interval only)
-                assign_mode     'fixed' | 'rotate' | 'anyone'
-                assignee_id     -> profiles  (fixed owner, or whose turn it is)
-                points          int default 1
-                notify_time     time, nullable (null = default time)
-                next_due        date
-                last_notified   date, nullable  (so each due date notifies once)
-                archived        bool
+chores       id, title, notes
+             mode          'calendar' | 'after_done'
+             every, unit   e.g. 2 + 'week'   (unit: day | week | month)
+             assign        'fixed' | 'rotate' | 'anyone'
+             assignee_id   fixed owner, or whose turn it is (null for 'anyone')
+             points        effort, default 1
+             next_due      ISO date
+             anchor_day    day of month that monthly fixed-schedule chores land on
+             archived
 
-completions     id, chore_id, user_id, done_on (date), created_at
-                skipped         bool
-                points          int     -- copied at completion; editing a chore doesn't rewrite history
-                meal_id         -> meals, nullable
-
-meals           id, name, liked ('yes' | 'meh' | 'no'), notes
-                -- later: tags, season months, ingredients
-
-push_subscriptions  id, user_id, endpoint, p256dh, auth
+completions  id, chore_id, user_id, done_on, skipped,
+             points (copied, so editing a chore doesn't rewrite history), created_at
 ```
 
-Scores, streaks, history and "last eaten" are all **computed from `completions`** with SQL views, never stored separately.
+Added in later milestones:
+
+- `chores.notify_time`, `chores.last_notified` (M2)
+- `push_subscriptions(user_id, endpoint, p256dh, auth)` (M2)
+- `chores.kind = 'meal'`, `meals(id, name, liked, notes)`, `completions.meal_id` (M4)
+
+Scores, streaks, history and "last eaten" are all computed from `completions`, never stored separately.
 
 ---
 
-## 5. Core logic
+## 5. Core logic (`schedule.py`)
 
-All of this goes in **one pure module** (`schedule.ts`) with a small test file, because it's the only tricky logic in the app.
+**A schedule is "every N days/weeks/months" plus the next due date.** "Bins every Tuesday" is every 1 week with the next due date on a Tuesday. "The 1st of the month" is every 1 month with the next due date on the 1st.
 
 **Next due date after a chore is done or skipped:**
-- *Calendar:* keep adding the period (N days, weeks or months) to the current due date until it's after today. If you put the bins out a day early, they're due again next Tuesday. If you're three weeks late, it lands on the next Tuesday rather than piling up missed weeks.
-- *Interval:* done → `done date + interval_days`. Skipped → `today + interval_days`.
+- *Fixed schedule:* keep adding the period to the current due date until it's after today.
+  - Put the bins out a day early and they're due again next Tuesday.
+  - Three weeks late lands on the next Tuesday, so missed weeks don't pile up.
+  - Monthly chores use `anchor_day`, so the 31st becomes Feb 28 and then goes back to Mar 31.
+- *After last done:* today plus the period.
 
 **Assignment after done:**
 - `fixed`: no change.
-- `rotate`: `assignee_id` switches to the other person.
-- `anyone`: no assignee. Whoever ticks it off gets the points.
+- `rotate`: passes to the other person.
+- `anyone`: whoever ticks it off gets the points.
 
-**Overdue:** `next_due < today` shows it in red at the top of the list.
+**Skip:** moves the date the same way, awards 0 points, and **does not** pass the turn.
 
-**Skip:** works like "done" for the next due date but records `skipped = true`, awards 0 points and **does not** pass the turn (decision D8).
+**Double taps, or both phones at once:** a Done button carries the due date it was showing, and the database update only applies if that date is still current, so one occurrence can't count twice.
 
-**Timezone:** one household timezone constant. Dates are stored as plain `date` values (no time) to avoid off-by-one-day bugs.
+Chores can also be ticked off early from *Upcoming*.
 
 ---
 
 ## 6. Screens
 
-1. **Today** (home): overdue and due today, grouped as *Mine / Hers / Either*. Tap to mark done; swipe or long-press to skip.
-2. **Upcoming**: the next 14 days.
-3. **Chores**: all chores, with add and edit. The form shows only the fields that apply to the chosen schedule and assignment types.
-4. **History**: who did what and when, newest first.
-5. **Scores**: this week's points per person, last week's winner and current streaks.
-6. **Settings**: your name, a notifications on/off button, the default notification time.
+Built:
+1. **Today**: overdue and due today, grouped as *Mine / Hers / Either of us*, with Done and Skip buttons.
+2. **Upcoming**: the next 14 days, with Done and Skip buttons.
+3. **Chores**: all chores, with add, edit and archive.
+4. **History**: who did what and when.
 
-**Cooking flow:** ticking off the daily *Cooking* chore opens a sheet with *"What did you make?"* (autocomplete from past meals, or type a new one) and a 👍/😐/👎 rating. The *Today* card for Cooking shows **3 suggestions** before it's done.
+Later:
+5. **Scores** (M3): this week's points per person, last week's winner and streaks.
+6. **Settings** (M2): a notifications on/off button and the default notification time.
+
+**Cooking flow (M4):** ticking off the daily *Cooking* chore asks *"What did you make?"* (autocomplete from past meals) and a 👍/😐/👎 rating. The Cooking card shows 3 suggestions.
 
 ---
 
-## 7. Notifications (iPhone specifics)
+## 7. Notifications (M2)
 
-- iOS supports web push only for **apps added to the home screen** (iOS 16.4 and newer). Notifications must be enabled by tapping a button inside the installed app; the app can't ask for permission on its own.
-- **Login inside the installed app:** the home-screen app keeps its storage separate from Safari, so magic links (which open in Safari) won't log the app in. Use **email + password** or a **6-digit email code** instead (D5).
-- **Flow:** every 5 minutes pg_cron calls the `notify` Edge Function. It finds chores where `next_due + (notify_time or default) <= now` and `last_notified <> next_due`, sends a push, then sets `last_notified = next_due`.
+- iOS supports web push only for **apps added to the home screen** (iOS 16.4 and newer). Notifications must be enabled by tapping a button inside the installed app.
+- Needs:
+  - a `manifest.json` and a small service worker (`sw.js`), served from the root so they cover the whole app;
+  - VAPID keys;
+  - `pywebpush` on the server.
+- **Trigger:** a protected `/cron/notify?key=…` route that the host's scheduler (or a free external cron service) calls every ~5 minutes. It finds chores where the due date plus `notify_time` (or the default time) has passed and `last_notified` isn't today's due date, sends the push, then records it.
 - **Who gets the notification:** the assignee for `fixed` and `rotate` chores; both of you for `anyone` chores.
-- v1 sends one notification per due date. Repeat reminders for overdue chores are in the backlog.
+- **Login inside the installed app:** the password form works there. (Magic links wouldn't, because they open in Safari, which has separate storage.)
 
 ---
 
-## 8. Points and streaks (friendly competition)
+## 8. Points and streaks (M3, friendly competition)
 
-- Each chore has a point value (effort), e.g. 1 = quick, 2 = normal, 3 = big job.
+- Each chore has a point value (effort): 1 = quick, 2 = normal, 3 = big job.
 - **Weekly score:** the sum of points from Monday to Sunday per person. Last week's winner is shown on the *Scores* screen.
-- **Streak:** see D7 for the definition.
+- **Streak:** consecutive days with none of *your* chores overdue.
 - Skipped chores earn 0 points.
 
 ---
 
-## 9. Cooking and meals
+## 9. Cooking and meals (M4)
 
 **v1:**
-- Cooking is a daily chore with `kind = 'meal'`, assigned with any of the three modes (taking turns probably makes sense).
+- Cooking is a daily chore with `kind = 'meal'`, assigned with any of the three modes.
 - Completing it logs a meal and its rating.
 - **Suggestions:** meals rated 👍, not eaten in the last 7 days, sorted by longest since last eaten, top 3. This is one SQL query.
 
-**Later (backlog), in rough order:**
+**Later, in rough order:**
 1. Tags such as *quick / weekend / veggie*, with quick meals suggested on weekdays.
 2. Season months per meal, or a seasonal-produce list per month, to boost meals that are in season.
 3. Ingredients per meal → a shopping list for the week.
@@ -168,69 +175,64 @@ All of this goes in **one pure module** (`schedule.ts`) with a small test file, 
 
 | # | Decision | Choice |
 |---|---|---|
-| D1 | Frontend framework | **React + Vite + TypeScript** |
-| D7 | Streak definition | **Consecutive days with none of *your* chores overdue** (doing your own chores is what counts, not racking up easy ones) |
-| D9 | App language | **English** |
-| D10 | Where the code lives | **`chores-app/` folder on this branch**, to be moved to its own repo later (the app is self-contained, so moving it is a plain copy) |
-| D11 | Tests | **Only `schedule.ts`**, with Vitest (comes with Vite) |
+| D1 | Framework | **Python Dash 4.5 + dash-mantine-components 2.8** (Mantine 8). DMC 3.x needs React 19, which Dash 4.5 only loads behind an experimental flag. Upgrade when Dash makes React 19 the default. |
+| D2 | UI | **Mantine components**, with automatic light/dark mode |
+| D3 | Schedule format | **every N + unit, anchored on the due date** (see section 5) |
+| D5 | Login | **Name + password**, stay logged in for a year |
+| D7 | Streak | **Consecutive days with none of *your* chores overdue** |
+| D8 | Skip passes the turn? | **No** |
+| D9 | Language | **English** |
+| D10 | Code location | **`chores-app/` on this branch**, to move to its own repo later (self-contained, so it's a plain copy) |
+| D11 | Tests | **`test_schedule.py`** (plain asserts; also runs under pytest) |
 
-**Still open** (the defaults are what I'd pick)
+**Packages:** `dash`, `dash-mantine-components`, and `pywebpush` from M2. Everything else is the standard library: `sqlite3`, `zoneinfo`, `calendar`.
 
-| # | Decision | Default | Alternatives |
-|---|---|---|---|
-| D2 | Styling / UI | **Mantine** (`@mantine/core`, the React library that dash-mantine-components wraps) | Plain CSS (no dependency, but every form and dialog is styled by hand) |
-| D3 | Calendar schedule format | **Simple fields** (every / unit / weekday / month_day) | RFC 5545 RRULE strings with the `rrule` package: more flexible (e.g. "last Friday of the month"), but adds a dependency and is harder to edit |
-| D4 | Frontend hosting | **Netlify** or **Cloudflare Pages** | Vercel, GitHub Pages |
-| D5 | Login method | **Email + password** (stay logged in) | 6-digit email code |
-| D6 | Default notification time | **09:00** | Any time you like |
-| D8 | Does skip pass the turn? | **No** | Yes |
+**Still open**
 
-**Planned packages (the whole list):** `react`, `vite`, `@mantine/core` + `@mantine/hooks`, `@supabase/supabase-js`, `vitest` (dev only), and `web-push` (inside the Edge Function).
-
-Left out on purpose:
-- **Router:** six screens on a bottom tab bar is just one piece of React state. Add `react-router` if deep links are ever needed.
-- **Date-picker library:** the iPhone's own date picker (`<input type="date">`) is better than any library's.
-- **Date library, state manager, PWA plugin:** the service worker is about 30 lines written by hand.
+| # | Decision | Notes |
+|---|---|---|
+| D4 | **Hosting** | Dash needs a Python process that's always running and a disk that keeps `chores.db`. Options (check current pricing and terms): <br>• **PythonAnywhere**: made for Python web apps and keeps files. The free tier is likely enough to start, but it restricts outbound internet, which may block push (M2); the paid tier is about $5/mo. **My pick.** <br>• **Small VPS** (about €4–5/mo): full control, but you maintain it. <br>• **Raspberry Pi at home + Cloudflare Tunnel**: free if you have a Pi. <br>• Render, Railway, Koyeb free tiers: usually sleep when idle (slow first open) and lose local files, so not a good fit for SQLite. |
+| D6 | Default notification time | 09:00? |
 
 ---
 
 ## 11. Milestones
 
-**M0 – Setup (about 1 evening)**
-- Create the Supabase project and a React + Vite app in `chores-app/`, and deploy a hello-world to the hosting.
-- Create both accounts and **turn off sign-ups**.
-- Add the manifest and icon so the app can be added to the home screen on both iPhones.
+**M1 – Core chores ✅ (built, runs locally)**
+- Login, chores add/edit/archive, both schedule types, all three assignment modes.
+- Today, Upcoming and History screens; done and skip with double-tap protection.
+- Tests for the schedule logic.
 
-**M1 – Core chores (MVP)**
-- Tables, RLS, `schedule.ts` and its tests.
-- Chores add/edit, the *Today* and *Upcoming* screens, done and skip, live sync.
-- *History* screen.
-- ✅ You can actually use it daily from here on.
+**M0 – Go live (next)**
+- Pick hosting (D4), set `SECRET_KEY` and `APP_TZ`, create both logins.
+- Set up a daily backup of `chores.db`.
+- Add a manifest and icon so it opens full-screen from the home screen on both iPhones.
 
 **M2 – Notifications**
-- Service worker, saving the push subscription, the `notify` Edge Function and pg_cron.
+- Service worker, saving push subscriptions, the `/cron/notify` route, the scheduler.
 - Test on both iPhones.
 
 **M3 – Points and streaks**
-- Point values per chore, SQL views, the *Scores* screen.
+- Scores screen, weekly winner, streaks.
 
 **M4 – Cooking**
-- Meals table, the completion sheet, suggestions on the Cooking card.
+- Meals table, the "what did you make?" step, suggestions on the Cooking card.
 
 **Backlog / ideas**
 - Repeat reminders for overdue chores (e.g. an evening nudge).
 - Vacation mode that pauses everything and shifts due dates.
 - Rooms or categories, with a filter.
 - Swap request ("can you do mine today?").
-- Monthly stats and charts.
-- Offline support and a home-screen badge with the count due.
+- Monthly stats and charts (DMC has charts built in).
+- Upgrade to DMC 3 / React 19.
 - The meal features from section 9.
 
 ---
 
 ## 12. Risks and gotchas
 
-- **The Supabase free tier pauses a project after about 1 week without activity.** Daily use prevents this. If you're away for a long time (holiday), open the app once or unpause it from the dashboard.
-- **iOS push only works from the installed home-screen app.** Notifications won't work when the app is opened in a Safari tab.
-- **Timezones / DST:** keep "today" calculated in the household timezone in one place.
-- **Editing a chore's schedule** recalculates `next_due` from today. Past completions stay as they are.
+- **Backups:** everything is in one SQLite file. Copy it daily (M0).
+- **iOS push only works from the installed home-screen app.** It won't work from a Safari tab.
+- **Timezone:** set `APP_TZ` on the server. Hosts usually run on UTC, which would shift "today" at night.
+- **Editing a chore's due date** moves `anchor_day` for monthly chores. Past completions are never changed.
+- **Every tap goes to the server.** That's fine for this app, but it would feel slow on a very bad connection.
