@@ -34,7 +34,9 @@ A chores web app for a couple (two users, both on iPhone). It's used mainly from
 - **Calendar chores** step forward from the current due date until it's after today, so missed weeks don't pile up and doing a chore early keeps the rhythm. **after_done** chores are due today + the period.
 - **Skip:** moves the date, awards 0 points, and doesn't pass the turn.
 - **Rotate:** passes to the other user when done.
-- **Double-tap / both-phones guard:** Done/Skip button ids carry the `due` date they showed. `db.complete` only updates `where next_due = <that date>`, so an occurrence counts once.
+- **Double-tap / both-phones guard:** Done/Skip buttons carry the `due` date they showed (`data-due`). `db.complete` only updates `where next_due = <that date>`, so an occurrence counts once.
+- **Look (Nov 2026, the owners' call):** calm iOS-style "Liquid Glass" (pastel mist, frosted cards, rim highlights, floating tab bar, SF Pro Rounded via `ui-rounded`) plus loud internet memes: meme cat stickers in `assets/cats/` (FrankerFaceZ emotes; the owners want real downloaded memes, not drawn ones), a marquee, Impact captions, cat GIFs from cataas.com. Users are Florian and Rebekka; avatars match by name. The README has the cat table.
+- **Done/Skip flow:** `assets/fx.js` catches the tap, plays the card's exit animation, then `dash_clientside.set_props("pending", …)` triggers the server `act` callback, batching overlapping taps. Cards have ids that include the due date; Dash uses ids as React keys, so cards mount and unmount cleanly.
 - **Streak (to build in M3):** consecutive days with none of *your* chores overdue.
 - **Sync between phones:** re-render after every action plus a 60-second `dcc.Interval`. No websockets.
 - **Login cookie:** signed and lasts 365 days. `SESSION_COOKIE_SECURE` is turned on when `SECRET_KEY` is set (production).
@@ -43,7 +45,8 @@ A chores web app for a couple (two users, both on iPhone). It's used mainly from
 
 ## Gotchas found while building
 
-- Dash calls the layout function once at startup, outside any request, so **don't read `flask.session` in `layout()`**. Per-user bits, like the "name · log out" link, are filled by the `render` callback.
+- Dash calls the layout function once at startup, outside any request, so **don't read `flask.session` in `layout()`**. Per-user bits, like the avatar on the log-out chip, are filled by the `render` callback.
+- **Glass:** don't animate `opacity` on a parent of a `backdrop-filter` element (Chrome then blurs nothing). The dock slides in with transform only for this reason. `body` must stay transparent so the mist layer (`.app::before`) shows.
 - Pattern-matching button callbacks also fire when buttons are re-rendered. The `clicked()` helper in `app.py` checks `ctx.triggered[0]["value"]` to tell a real tap apart.
 - In debug mode Dash pings `dash-version.plotly.com`. That causes a harmless console error when offline.
 
@@ -55,26 +58,29 @@ A chores web app for a couple (two users, both on iPhone). It's used mainly from
   - turn-taking passes to the other person;
   - a double tap counts once;
   - an overdue skip moves to the next date.
+- **M0 (go live) is built, not yet deployed.** Tested locally with the Flask test client and headless Chrome:
+  - `/manifest.json` and `assets/icons/` (Smudge on the mist), so it installs as a home-screen app;
+  - settings in `chores-app/.env` (`settings.py` loads it);
+  - backups: `python db.py backup FOLDER` (PythonAnywhere daily task) and `/api/backup?key=…` (iPhone Shortcuts automation into iCloud Drive);
+  - a Scriptable widget: `/api/widget?key=…` plus `scriptable/chores-widget.js`, which the app copies with the address and key filled in;
+  - tap your name in the app for the settings sheet: install tips, copy buttons, log out.
+  - The deploy steps are in `chores-app/README.md`. Still to do by the owners: create the PythonAnywhere account and follow them.
 - Not built yet:
-  - **M0** go live: hosting, `SECRET_KEY`, `APP_TZ`, daily backup of `chores.db`, manifest and icon for the home screen;
   - **M2** push notifications;
   - **M3** points, streaks and Scores screen;
   - **M4** meals.
+- **Widget and backup keys** are HMACs of `SECRET_KEY` + kind + user id (`link_key` in app.py). Nothing is stored; changing `SECRET_KEY` revokes them all. `PUBLIC_PATHS`/`PUBLIC_PREFIXES` in app.py list everything reachable without a login.
+- **iCloud:** ruled out as the live database (web apps can't use it; CloudKit needs a paid developer account and a rewrite). It's used for nightly backups only.
 
 ## Open decisions (ask the owner)
 
-- **D4 Hosting:** the suggestion is **PythonAnywhere**. It's built for Python web apps and keeps the SQLite file. Start on the free tier; its restricted outbound internet may block web push (M2), in which case the paid plan (~$5/mo) fixes that. A Raspberry Pi was discussed and rejected: ~€100–130 upfront plus sysadmin work. Render, Railway and Koyeb free tiers sleep and lose local files.
 - **D6 Default notification time:** suggested 09:00.
 
 ## Suggested next steps
 
-1. Run it locally:
-   - `cd chores-app && python -m venv .venv && pip install -r requirements.txt`
-   - `python db.py adduser <name>` once per person
-   - `python app.py`
-2. Deploy (M0) once hosting is chosen. Offer to write the PythonAnywhere steps into the README.
-3. M2 notifications:
-   - `manifest.json` and `sw.js` served from the site root;
+1. Deploy: follow "Deploy on PythonAnywhere" in `chores-app/README.md` (D4 chose PythonAnywhere, Nov 2026). Free tier first; its restricted outbound internet may block web push (M2), and the paid plan (~$5/mo) fixes that.
+2. M2 notifications:
+   - `sw.js` served from the site root (the manifest exists);
    - VAPID keys;
    - `pywebpush`;
    - a `push_subscriptions` table;

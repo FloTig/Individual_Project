@@ -2,7 +2,7 @@
 
 A web app for two people to define household chores, see what's due and tick chores off. It runs mainly on two iPhones, installed to the home screen.
 
-**Status:** the core app (milestone M1) is built and runs locally. Next is hosting (M0's deploy step), then notifications (M2). See section 11.
+**Status:** the core app (M1) and the go-live pieces (M0: home-screen icon, widget, backups) are built. Next is deploying to PythonAnywhere, then notifications (M2). See section 11.
 
 ---
 
@@ -184,6 +184,9 @@ Later:
 | D9 | Language | **English** |
 | D10 | Code location | **`chores-app/` on this branch**, to move to its own repo later (self-contained, so it's a plain copy) |
 | D11 | Tests | **`test_schedule.py`** (plain asserts; also runs under pytest) |
+| D4 | Hosting | **PythonAnywhere**, free tier to start. Steps in README.md. The paid tier (~$5/mo) if web push (M2) needs unrestricted outbound internet. |
+| D12 | Widget | **Scriptable** (free iOS app) reading `/api/widget?key=…`. Web apps can't have native widgets. |
+| D13 | iCloud | **Nightly backups only**, via an iPhone Shortcuts automation. iCloud can't be a web app's database. |
 
 **Packages:** `dash`, `dash-mantine-components`, and `pywebpush` from M2. Everything else is the standard library: `sqlite3`, `zoneinfo`, `calendar`.
 
@@ -191,7 +194,6 @@ Later:
 
 | # | Decision | Notes |
 |---|---|---|
-| D4 | **Hosting** | Dash needs a Python process that's always running and a disk that keeps `chores.db`. Options (check current pricing and terms): <br>• **PythonAnywhere**: made for Python web apps and keeps files. The free tier is likely enough to start, but it restricts outbound internet, which may block push (M2); the paid tier is about $5/mo. **My pick.** <br>• **Small VPS** (about €4–5/mo): full control, but you maintain it. <br>• **Raspberry Pi at home + Cloudflare Tunnel**: free if you have a Pi. <br>• Render, Railway, Koyeb free tiers: usually sleep when idle (slow first open) and lose local files, so not a good fit for SQLite. |
 | D6 | Default notification time | 09:00? |
 
 ---
@@ -203,10 +205,12 @@ Later:
 - Today, Upcoming and History screens; done and skip with double-tap protection.
 - Tests for the schedule logic.
 
-**M0 – Go live (next)**
-- Pick hosting (D4), set `SECRET_KEY` and `APP_TZ`, create both logins.
-- Set up a daily backup of `chores.db`.
-- Add a manifest and icon so it opens full-screen from the home screen on both iPhones.
+**M0 – Go live (built; deploying is next)**
+- ✅ Manifest and icon, so it opens full-screen from the home screen.
+- ✅ Daily backups: a PythonAnywhere task (`db.py backup`) and an iPhone Shortcuts automation into iCloud Drive (`/api/backup`).
+- ✅ Scriptable widget for the home and lock screen (`/api/widget`).
+- ✅ Settings in `.env`; deploy steps in README.md.
+- To do: create the PythonAnywhere account, set `SECRET_KEY` and `APP_TZ`, create both logins, and install it on both iPhones.
 
 **M2 – Notifications**
 - Service worker, saving push subscriptions, the `/cron/notify` route, the scheduler.

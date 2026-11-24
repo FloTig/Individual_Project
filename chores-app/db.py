@@ -1,13 +1,21 @@
-"""SQLite storage. Create or reset a login with `python db.py adduser NAME`."""
+"""SQLite storage.
+
+Command line:
+  python db.py adduser NAME      create a login, or reset its password
+  python db.py backup FOLDER     save a dated copy of the database there, keeping the newest 30
+"""
+import glob
 import os
 import sqlite3
 import sys
+import tempfile
 from contextlib import contextmanager
 from datetime import date
 from getpass import getpass
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import settings  # noqa: F401  (loads .env before CHORES_DB is read)
 import schedule
 
 PATH = os.environ.get("CHORES_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "chores.db"))
@@ -143,6 +151,37 @@ def history(limit: int = 50) -> list[dict]:
         )]
 
 
+def done_count() -> int:
+    """All completions ever, skips excluded (feeds the hit counter on History)."""
+    with connect() as c:
+        return c.execute("select count(*) from completions where not skipped").fetchone()[0]
+
+
+def snapshot() -> bytes:
+    """A consistent copy of the whole database, safe to take while the app is running."""
+    with tempfile.TemporaryDirectory() as folder:
+        copy = os.path.join(folder, "chores.db")
+        src, dst = sqlite3.connect(PATH), sqlite3.connect(copy)
+        try:
+            src.backup(dst)
+        finally:
+            src.close()
+            dst.close()
+        with open(copy, "rb") as f:
+            return f.read()
+
+
+def backup_to(folder: str, keep: int = 30) -> str:
+    """Write chores-YYYY-MM-DD.db into folder and delete all but the newest `keep` copies."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"chores-{date.today().isoformat()}.db")
+    with open(path, "wb") as f:
+        f.write(snapshot())
+    for old in sorted(glob.glob(os.path.join(folder, "chores-*.db")))[:-keep]:
+        os.remove(old)
+    return path
+
+
 if __name__ == "__main__":
     init()
     if len(sys.argv) == 3 and sys.argv[1] == "adduser":
@@ -154,5 +193,7 @@ if __name__ == "__main__":
                 (name, generate_password_hash(pw)),
             )
         print(f"Saved login for {name}.")
+    elif len(sys.argv) == 3 and sys.argv[1] == "backup":
+        print(f"Saved {backup_to(sys.argv[2])}")
     else:
-        print("usage: python db.py adduser NAME")
+        print(__doc__)

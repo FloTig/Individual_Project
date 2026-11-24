@@ -1,3 +1,5 @@
 chores.db
 __pycache__/
 .venv/
+.env
+backups/
