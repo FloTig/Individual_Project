@@ -18,6 +18,7 @@ A web app for two people to define household chores, see what's due and tick cho
 | Cooking | A special daily chore. Logging what you made feeds a **meal history**, and the app **suggests meals** you like but haven't had in a while. Seasonal products and other ideas come later. |
 | Login | Own account each. |
 | Your role | Claude builds it; you decide on design, features and packages (see section 10). |
+| Stack | React + Vite + TypeScript, English UI, code in `chores-app/` on this branch for now. |
 
 **Why not iCloud:** a web app can't use iCloud Drive as a database. The only Apple option is CloudKit JS, which needs a paid developer account (€99/yr), and sharing data between two Apple IDs is fiddly to set up. Supabase's free tier gives a database, login and live sync for €0.
 
@@ -161,32 +162,42 @@ All of this goes in **one pure module** (`schedule.ts`) with a small test file, 
 
 ---
 
-## 10. Decisions for you
+## 10. Decisions
 
-The defaults are what I'd pick. Change any of them.
+**Decided**
+
+| # | Decision | Choice |
+|---|---|---|
+| D1 | Frontend framework | **React + Vite + TypeScript** |
+| D7 | Streak definition | **Consecutive days with none of *your* chores overdue** (doing your own chores is what counts, not racking up easy ones) |
+| D9 | App language | **English** |
+| D10 | Where the code lives | **`chores-app/` folder on this branch**, to be moved to its own repo later (the app is self-contained, so moving it is a plain copy) |
+| D11 | Tests | **Only `schedule.ts`**, with Vitest (comes with Vite) |
+
+**Still open** (the defaults are what I'd pick)
 
 | # | Decision | Default | Alternatives |
 |---|---|---|---|
-| D1 | Frontend framework | **SvelteKit** (static build, least boilerplate) | React + Vite, Vue + Vite. Pick one you already know if you prefer. |
-| D2 | Styling | **Plain CSS** with variables and automatic dark mode | Tailwind, or a component library (e.g. shadcn/ui) |
+| D2 | Styling / UI | **Mantine** (`@mantine/core`, the React library that dash-mantine-components wraps) | Plain CSS (no dependency, but every form and dialog is styled by hand) |
 | D3 | Calendar schedule format | **Simple fields** (every / unit / weekday / month_day) | RFC 5545 RRULE strings with the `rrule` package: more flexible (e.g. "last Friday of the month"), but adds a dependency and is harder to edit |
 | D4 | Frontend hosting | **Netlify** or **Cloudflare Pages** | Vercel, GitHub Pages |
 | D5 | Login method | **Email + password** (stay logged in) | 6-digit email code |
 | D6 | Default notification time | **09:00** | Any time you like |
-| D7 | Streak definition | **Consecutive days with none of *your* chores overdue** | Consecutive days you completed at least one chore (simpler, but easier to game) |
 | D8 | Does skip pass the turn? | **No** | Yes |
-| D9 | App language | **English** | Dutch, or both |
-| D10 | Where the code lives | **Its own new repo**, `chores` (this repo is an unrelated project) | `chores-app/` folder in this repo |
-| D11 | Tests | **Only `schedule.ts`**, with Vitest (comes with Vite/SvelteKit) | More coverage |
 
-**Planned packages (the whole list):** the framework, `@supabase/supabase-js`, and `web-push` (inside the Edge Function). No date library, state manager, UI kit or PWA plugin: the service worker is about 30 lines written by hand.
+**Planned packages (the whole list):** `react`, `vite`, `@mantine/core` + `@mantine/hooks`, `@supabase/supabase-js`, `vitest` (dev only), and `web-push` (inside the Edge Function).
+
+Left out on purpose:
+- **Router:** six screens on a bottom tab bar is just one piece of React state. Add `react-router` if deep links are ever needed.
+- **Date-picker library:** the iPhone's own date picker (`<input type="date">`) is better than any library's.
+- **Date library, state manager, PWA plugin:** the service worker is about 30 lines written by hand.
 
 ---
 
 ## 11. Milestones
 
 **M0 – Setup (about 1 evening)**
-- Create the Supabase project and the frontend repo, and deploy a hello-world to the hosting.
+- Create the Supabase project and a React + Vite app in `chores-app/`, and deploy a hello-world to the hosting.
 - Create both accounts and **turn off sign-ups**.
 - Add the manifest and icon so the app can be added to the home screen on both iPhones.
 
