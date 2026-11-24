@@ -1,6 +1,6 @@
 # Chores
 
-A chores app for two people: Python Dash + dash-mantine-components, with SQLite storage. It runs on a small server and is used from the iPhone home screen, with a widget and nightly backups to iCloud Drive. See [PLAN.md](PLAN.md) for the plan.
+A chores app for two people: Python Dash + dash-mantine-components, with SQLite storage. It runs on Railway and is used from the iPhone home screen, with a widget and nightly backups to iCloud Drive. See [PLAN.md](PLAN.md) for the plan.
 
 ## Run it on your Mac
 
@@ -16,11 +16,11 @@ python app.py                      # http://127.0.0.1:8050
 
 To try it on your phones over home wifi, run `HOST=0.0.0.0 python app.py`, find the Mac's address with `ipconfig getifaddr en0`, and open `http://<that address>:8050`. Don't put `SECRET_KEY` in your local `.env`: it makes the login cookie HTTPS-only, so logging in over plain `http://` would fail.
 
-Tests: `python test_schedule.py`
+Tests: `python test_schedule.py` and `python test_login.py`
 
 ## Settings
 
-Settings go in a `.env` file next to the code. Copy [.env.example](.env.example) to `.env` and fill it in. `.env` is gitignored, so it never gets committed. Real environment variables take priority over it.
+Settings go in a `.env` file next to the code. Copy [.env.example](.env.example) to `.env` and fill it in. `.env` is gitignored, so it never gets committed. Real environment variables take priority over it; on Railway they're service variables (see below).
 
 | Name | What it does |
 |---|---|
@@ -29,46 +29,29 @@ Settings go in a `.env` file next to the code. Copy [.env.example](.env.example)
 | `CHORES_DB` | Path of the SQLite file. Default: `chores.db` next to the code. |
 | `HOST` / `PORT` | Where `python app.py` listens. Defaults: `127.0.0.1:8050`. |
 
-## Deploy on PythonAnywhere
+## Deploy on Railway
 
-The free account is enough to start: one web app at `<username>.pythonanywhere.com`, with HTTPS. Its servers can only reach an allowlist of websites. That doesn't matter yet: the cat GIFs load on your phones, not on the server. Push notifications (M2) may need the paid plan later. Free web apps also have to be renewed every few months with a button on the Web tab; PythonAnywhere emails a reminder.
+Live at **https://individualproject-production-223ccbdd.up.railway.app**, on [Railway](https://railway.com): project *peaceful-prosperity*, service *Individual_Project*, region EU West (Amsterdam). Railway's builder (Railpack) installs `requirements.txt` on Python 3.13.
 
-1. **Get the code there.** Create an account, open a **Bash console** (Consoles tab) and run:
-   ```bash
-   git clone -b claude/chores-webapp-planning-s28xvt https://github.com/FloTig/Individual_Project.git
-   cd Individual_Project/chores-app
-   python3.12 -m venv ~/.virtualenvs/chores      # or the newest Python 3 offered (3.10+)
-   source ~/.virtualenvs/chores/bin/activate
-   pip install -r requirements.txt
-   ```
-   If the GitHub repo is private, git asks for a password: use a GitHub personal access token.
-2. **Settings and logins.** In the same console:
-   ```bash
-   cp .env.example .env
-   python -c "import secrets; print(secrets.token_hex())"   # copy the output
-   nano .env                                                # paste it after SECRET_KEY=, check APP_TZ; Ctrl+O, Enter, Ctrl+X
-   python db.py adduser Florian
-   python db.py adduser Rebekka
-   ```
-3. **Create the web app.** On the **Web** tab: Add a new web app → Manual configuration (not "Flask") → the same Python version. Then on that page:
-   - **Source code:** `/home/<username>/Individual_Project/chores-app`
-   - **Virtualenv:** `/home/<username>/.virtualenvs/chores`
-   - **WSGI configuration file:** open it, delete everything, and paste:
-     ```python
-     import sys
-     sys.path.insert(0, "/home/<username>/Individual_Project/chores-app")
-     from app import server as application  # settings come from chores-app/.env
-     ```
-   - **Force HTTPS:** on.
-   - Press **Reload**, then open `https://<username>.pythonanywhere.com`.
-4. **Server-side backups.** On the **Tasks** tab, add a daily task (the free plan allows one). It keeps the newest 30 copies:
-   ```bash
-   /home/<username>/.virtualenvs/chores/bin/python /home/<username>/Individual_Project/chores-app/db.py backup /home/<username>/backups
-   ```
+How the service is set up (service → **Settings** and **Variables**):
 
-**Updating later:** open a Bash console, run `cd ~/Individual_Project && git pull`, then press **Reload** on the Web tab. If `requirements.txt` changed, run `pip install -r chores-app/requirements.txt` first, with the virtualenv active.
+| Setting | Value | Why |
+|---|---|---|
+| Source | this repo, branch `claude/chores-webapp-planning-s28xvt`, root directory `/chores-app` | Every push to the branch redeploys. |
+| Start command | `python -c "from app import app; app.run()"` | **Not** `python app.py`: that runs with `debug=True`, and the debugger lets anyone run code on the server. Dash reads `HOST` and `PORT` from the environment; debug stays off. |
+| Healthcheck path | `/login` | A new deploy only goes live once this page answers. |
+| Volume | mounted at `/data` | Holds the database, so it survives redeploys. |
+| Variables | `HOST=0.0.0.0`, `APP_TZ=Europe/Amsterdam`, `CHORES_DB=/data/chores.db`, `SECRET_KEY` | Railway sets `PORT` itself (8080); the public domain points at that port. |
 
-**Restoring a backup:** on the Files tab, upload the backup file over `chores-app/chores.db` (or wherever `CHORES_DB` points), then press Reload.
+The web server is Werkzeug's built-in one: a single process with threads, which is plenty for two people. Switching to gunicorn would be a new dependency; only worth it if the app ever gets slow.
+
+**Logins:** service → **Console** (a shell on the server), then `/app/.venv/bin/python db.py adduser NAME`. It asks for the password. Running it again for an existing name resets that password. Plain `python` isn't on the Console's PATH.
+
+**Updating:** push to the branch. Railway builds, waits for the healthcheck, then switches over; follow it under **Deployments**. Changing a variable also needs **Deploy** on the staged-changes bar.
+
+**Backups:** the iPhone Shortcuts automation below saves a copy into iCloud Drive every night. Restoring means putting that file at `/data/chores.db` and restarting the service; this hasn't been tried on Railway yet (see PLAN.md).
+
+**Cost:** a trial (30 days or $5 of usage), then the Hobby plan: $5/month including $5 of usage, which this app should stay within.
 
 ## On your iPhones
 
@@ -76,7 +59,7 @@ Everything below is also explained inside the app: tap your name at the top righ
 
 ### Install it as an app
 
-Open your PythonAnywhere address in **Safari** and log in. Tap **Share → Add to Home Screen**. On iOS 26 it opens as its own full-screen app with the Smudge icon. The home-screen app keeps its own login, separate from Safari, so log in once more inside it. The login then lasts a year.
+Open the app's address in **Safari** and log in. Tap **Share → Add to Home Screen**. On iOS 26 it opens as its own full-screen app with the Smudge icon. The home-screen app keeps its own login, separate from Safari, so log in once more inside it. The login then lasts a year.
 
 ### Widget (home screen or lock screen)
 
@@ -98,7 +81,7 @@ A web app can't use iCloud as its database, so the data lives on the server. A S
 3. Add **Get Contents of URL** and paste the link.
 4. Add **Save File**. Turn **Ask Where to Save** off, choose a folder in iCloud Drive, and set the subpath to `Chores/chores-` + the **Current Date** variable + `.db`. Tap the date variable and set its format to Custom `yyyy-MM-dd`. Turn **Overwrite If File Exists** on.
 
-Each copy is a complete SQLite file, so it can be restored as described in "Restoring a backup".
+Each copy is a complete SQLite file, so it can be restored as described under "Backups" in the Railway section.
 
 **Keep the widget script and backup link private.** They work without a password. Changing `SECRET_KEY` revokes all of them.
 
@@ -107,6 +90,7 @@ Each copy is a complete SQLite file, so it can be restored as described in "Rest
 - `app.py`: login, the screens, the callbacks, `/manifest.json`, `/api/widget` and `/api/backup`.
 - `db.py`: the SQLite schema and queries, plus the `adduser` and `backup` commands.
 - `schedule.py`: due-date calculations. `test_schedule.py` tests them.
+- `test_login.py`: checks the brake on wrong passwords (10 misses in 15 minutes locks the login form).
 - `settings.py`: reads `.env`.
 - `scriptable/chores-widget.js`: the widget. The app fills in `__ORIGIN__` and `__KEY__` when you copy it.
 - `assets/`: Dash serves everything here, and loads the CSS and JS into every page automatically.

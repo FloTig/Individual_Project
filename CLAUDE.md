@@ -2,7 +2,7 @@
 
 This branch (`claude/chores-webapp-planning-s28xvt`) contains only the chores app in `chores-app/`. `main` still holds an unrelated older project (notebooks), so don't merge this branch into `main` without asking. The plan is to move `chores-app/` to its own repo later; take this file with it.
 
-The full product plan, with decisions and milestones, is in **`chores-app/PLAN.md`**. Run instructions are in `chores-app/README.md`. This file is the short handover from the first (cloud) session.
+The full product plan, with decisions and milestones, is in **`chores-app/PLAN.md`**. Run instructions are in `chores-app/README.md`. This file is the handover between sessions; keep it current.
 
 ## What this is
 
@@ -24,6 +24,7 @@ A chores web app for a couple (two users, both on iPhone). It's used mainly from
 - `chores-app/app.py`: Dash app. Flask login (`/login`, `/logout`, `before_request` guard), Mantine layout, callbacks.
 - `chores-app/db.py`: SQLite via `sqlite3`. Schema, queries, and the `python db.py adduser NAME` command (the only way to create logins; there's no sign-up page).
 - `chores-app/schedule.py`: pure due-date maths. `test_schedule.py` tests it (`python test_schedule.py` or pytest).
+- `chores-app/test_login.py`: the login brute-force brake.
 - Pinned versions: `dash==4.5.1`, `dash-mantine-components==2.8.1` (Mantine 8).
 
 ## Decisions made, and why
@@ -42,6 +43,8 @@ A chores web app for a couple (two users, both on iPhone). It's used mainly from
 - **Login cookie:** signed and lasts 365 days. `SESSION_COOKIE_SECURE` is turned on when `SECRET_KEY` is set (production).
 - **Timezone:** `APP_TZ` env var. If unset, the machine's local time is used. Must be set on the server, since hosts usually run on UTC.
 - **iCloud:** not usable as a web-app database.
+- **Hosting (D4, 24 Nov 2026): Railway**, EU West, project *peaceful-prosperity*, service *Individual_Project*, https://individualproject-production-223ccbdd.up.railway.app. Source: this branch, root `/chores-app`, auto-deploy on push. Start command `python -c "from app import app; app.run()"`, healthcheck `/login`, volume at `/data`, variables `HOST`, `APP_TZ=Europe/Amsterdam`, `CHORES_DB=/data/chores.db`, `SECRET_KEY`. PythonAnywhere was dropped: its free plan lost scheduled tasks for new accounts in Jan 2026 and restricts outbound internet; its paid plan is $10/mo against Railway Hobby's $5.
+- **Login brake:** 10 wrong passwords in 15 minutes locks the login form for everyone (global count, since Railway's proxy hides client IPs). Phones stay logged in through their cookie.
 
 ## Gotchas found while building
 
@@ -49,40 +52,28 @@ A chores web app for a couple (two users, both on iPhone). It's used mainly from
 - **Glass:** don't animate `opacity` on a parent of a `backdrop-filter` element (Chrome then blurs nothing). The dock slides in with transform only for this reason. `body` must stay transparent so the mist layer (`.app::before`) shows.
 - Pattern-matching button callbacks also fire when buttons are re-rendered. The `clicked()` helper in `app.py` checks `ctx.triggered[0]["value"]` to tell a real tap apart.
 - In debug mode Dash pings `dash-version.plotly.com`. That causes a harmless console error when offline.
+- **Never deploy with `python app.py`:** its `__main__` runs `debug=True`, and Werkzeug's debugger allows remote code execution. Production uses the start command above.
+- **Railway Console:** plain `python` isn't on its PATH; use `/app/.venv/bin/python db.py adduser NAME`.
+- **Railway volumes are tied to a region.** Create or attach a volume only after the service is in its final region.
+- `CHORES_DB` must point at the volume (`/data/...`). Without the volume mounted, the app crashes at start with `unable to open database file`.
 
-## Status
+## Status (24 Nov 2026)
 
-- **M1 (core chores) is done** and was tested end to end in a headless iPhone-sized browser:
-  - login and wrong-password message;
-  - add/edit/archive with validation;
-  - turn-taking passes to the other person;
-  - a double tap counts once;
-  - an overdue skip moves to the next date.
-- **M0 (go live) is built, not yet deployed.** Tested locally with the Flask test client and headless Chrome:
-  - `/manifest.json` and `assets/icons/` (Smudge on the mist), so it installs as a home-screen app;
-  - settings in `chores-app/.env` (`settings.py` loads it);
-  - backups: `python db.py backup FOLDER` (PythonAnywhere daily task) and `/api/backup?key=…` (iPhone Shortcuts automation into iCloud Drive);
-  - a Scriptable widget: `/api/widget?key=…` plus `scriptable/chores-widget.js`, which the app copies with the address and key filled in;
-  - tap your name in the app for the settings sheet: install tips, copy buttons, log out.
-  - The deploy steps are in `chores-app/README.md`. Still to do by the owners: create the PythonAnywhere account and follow them.
-- Not built yet:
-  - **M2** push notifications;
-  - **M3** points, streaks and Scores screen;
-  - **M4** meals.
-- **Widget and backup keys** are HMACs of `SECRET_KEY` + kind + user id (`link_key` in app.py). Nothing is stored; changing `SECRET_KEY` revokes them all. `PUBLIC_PATHS`/`PUBLIC_PREFIXES` in app.py list everything reachable without a login.
-- **iCloud:** ruled out as the live database (web apps can't use it; CloudKit needs a paid developer account and a rewrite). It's used for nightly backups only.
+- **M1 (core chores) is done** and was tested end to end in a headless iPhone-sized browser: login and wrong-password message, add/edit/archive with validation, turn-taking, double-tap protection, overdue skip.
+- **M0 (go live) is live on Railway.** Both logins exist (Florian, Rebekka; names are case-sensitive). Left for the owners, on their phones: Add to Home Screen, the Scriptable widgets, the Shortcuts backup automation. Also pick Railway's Hobby plan before the trial ends.
+- **Security review (24 Nov 2026):** no secrets in git history; pip-audit clean; SQL parameterised; callbacks take the user from the session; every route except `PUBLIC_PATHS`/`PUBLIC_PREFIXES` requires login; debug off. Added the login brake. Open items: PLAN.md section 12.
+- **Widget and backup keys** are HMACs of `SECRET_KEY` + kind + user id (`link_key` in app.py). Nothing is stored; changing `SECRET_KEY` revokes them all.
+- Not built yet: **M2** notifications, **M3** points, streaks and Scores screen, **M4** meals.
 
 ## Open decisions (ask the owner)
 
 - **D6 Default notification time:** suggested 09:00.
+- **D14 Notification route:** Shortcuts automation reading `/api/widget` (no code) or web push (`pywebpush`, a new dependency). Suggested: Shortcuts first.
+- **D15 Own repo:** move `chores-app/` with its history to a private repo; then switch Railway's source (root `/`).
 
 ## Suggested next steps
 
-1. Deploy: follow "Deploy on PythonAnywhere" in `chores-app/README.md` (D4 chose PythonAnywhere, Nov 2026). Free tier first; its restricted outbound internet may block web push (M2), and the paid plan (~$5/mo) fixes that.
-2. M2 notifications:
-   - `sw.js` served from the site root (the manifest exists);
-   - VAPID keys;
-   - `pywebpush`;
-   - a `push_subscriptions` table;
-   - a protected `/cron/notify?key=…` route hit every ~5 min.
-   iOS only allows web push from the home-screen-installed app (iOS 16.4+), after a tap inside the app. Details are in PLAN.md section 7.
+1. Owners: finish M0 on both iPhones (README "On your iPhones") and pick the Railway Hobby plan.
+2. Housekeeping: D15 own repo, two-factor login on GitHub and Railway, limit Railway's GitHub App to the chores repo, try one restore.
+3. A week or two of real use; ask what's annoying before choosing the order of M2–M4.
+4. M2 after D14/D6. For web push on Railway, a background thread in the single app process can do the 5-minute check; no cron service needed. iOS only allows web push from the home-screen app (iOS 16.4+), after a tap inside the app. Details: PLAN.md section 7.

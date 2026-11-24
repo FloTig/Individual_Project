@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
 import zlib
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -122,17 +123,29 @@ def require_login():
     return redirect("/login")
 
 
+# Brute-force brake: after FAIL_LIMIT wrong passwords in FAIL_WINDOW seconds, the form refuses everyone
+# until the oldest miss ages out. Logged-in phones keep working (their cookie lasts a year).
+# ponytail: one global count, not per IP (behind Railway's proxy every visitor shares one address). Fine for two users.
+FAIL_LIMIT, FAIL_WINDOW = 10, 15 * 60
+FAILS: list[float] = []
+
+
 @server.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
     if request.method == "POST":
-        user_id = db.login(request.form.get("name", ""), request.form.get("password", ""))
-        if user_id:
+        now = time.monotonic()
+        FAILS[:] = [t for t in FAILS if now - t < FAIL_WINDOW]
+        if len(FAILS) >= FAIL_LIMIT:
+            error = '<p class="err" role="alert">Too many wrong tries. Wait 15 minutes.</p>'
+        elif user_id := db.login(request.form.get("name", ""), request.form.get("password", "")):
             session.clear()
             session.permanent = True
             session["user_id"] = user_id
             return redirect("/")
-        error = '<p class="err" role="alert">Wrong name or password.</p>'
+        else:
+            FAILS.append(now)
+            error = '<p class="err" role="alert">Wrong name or password.</p>'
     return (LOGIN_PAGE.replace("{app_links}", APP_LINKS).replace("{fonts}", FONTS).replace("{cat}", CAT_GIF)
             .replace("{smudge}", SMUDGE).replace("{error}", error))
 

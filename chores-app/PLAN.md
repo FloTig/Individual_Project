@@ -2,25 +2,25 @@
 
 A web app for two people to define household chores, see what's due and tick chores off. It runs mainly on two iPhones, installed to the home screen.
 
-**Status:** the core app (M1) and the go-live pieces (M0: home-screen icon, widget, backups) are built. Next is deploying to PythonAnywhere, then notifications (M2). See section 11.
+**Status (24 Nov 2026):** the core app (M1) is built and **live on Railway** with both logins (M0). Left for M0: installing it on both iPhones, the widgets and the backup automation. Then housekeeping (own repo, account security), a couple of weeks of real use, and notifications (M2). See section 11.
 
 ---
 
 ## 1. What you asked for
 
-| Topic | Answer |
-|---|---|
-| Devices | Phones first (both iPhone). Installable web app. Laptops work too. |
-| Scheduling | Two types: **fixed schedule** (bins every Tuesday, the 1st of the month) and **after last done** (N days/weeks/months after it was last done). |
-| Assignment | Per chore: **one person** (always mine / always hers), **take turns**, or **either of us**. |
-| Data | Shared between both phones through the app's own server. |
-| Reminders | A push notification **per chore when it's due**. |
-| Overdue | Shows as overdue (red) until done, with a **skip** button that moves it to the next date. |
-| Tracking | **History**, plus **points and streaks** as a **friendly competition** with a weekly winner. |
-| Cooking | A special daily chore. Logging what you made feeds a **meal history**, and the app **suggests meals** you like but haven't had in a while. Seasonal products and other ideas come later. |
-| Login | Own account each. |
-| Stack | **Python Dash + dash-mantine-components**, SQLite. English UI. Code in `chores-app/` on this branch for now. |
-| Your role | Claude builds it; you review and decide on design, features and packages. |
+| Topic | Answer | Status |
+|---|---|---|
+| Devices | Phones first (both iPhone). Installable web app. Laptops work too. | ✅ built; install on both phones is next |
+| Scheduling | Two types: **fixed schedule** (bins every Tuesday, the 1st of the month) and **after last done** (N days/weeks/months after it was last done). | ✅ |
+| Assignment | Per chore: **one person** (always mine / always hers), **take turns**, or **either of us**. | ✅ |
+| Data | Shared between both phones through the app's own server. | ✅ on Railway |
+| Reminders | A push notification **per chore when it's due**. | M2, approach still open (D14) |
+| Overdue | Shows as overdue (red) until done, with a **skip** button that moves it to the next date. | ✅ |
+| Tracking | **History**, plus **points and streaks** as a **friendly competition** with a weekly winner. | History ✅; points and streaks M3 |
+| Cooking | A special daily chore. Logging what you made feeds a **meal history**, and the app **suggests meals** you like but haven't had in a while. Seasonal products and other ideas come later. | M4 |
+| Login | Own account each. | ✅ |
+| Stack | **Python Dash + dash-mantine-components**, SQLite. English UI. Code in `chores-app/` on this branch for now. | ✅ |
+| Your role | Claude builds it; you review and decide on design, features and packages. |  |
 
 **Why not iCloud:** a web app can't use iCloud Drive as a database. The only Apple option is CloudKit JS, which needs a paid developer account (€99/yr), and sharing data between two Apple IDs is fiddly to set up.
 
@@ -40,15 +40,15 @@ A web app for two people to define household chores, see what's due and tick cho
 ## 3. Architecture
 
 ```
-iPhone (home-screen web app)
+iPhone (home-screen web app, Scriptable widget, Shortcuts backup)
    │  HTTPS
    ▼
-One Python process (Dash on Flask)
+Railway, EU West: one Python process (Dash on Flask), volume at /data
    ├── app.py       login page, screens, callbacks
    ├── db.py        SQLite file (chores.db)
    └── schedule.py  due-date maths (tested)
 
-M2: a scheduler calls /cron/notify every ~5 min → pywebpush → Apple push service → iPhone
+M2 (if web push, D14): a check every ~5 min → pywebpush → Apple push service → iPhone
 ```
 
 - **No separate database service.** One SQLite file holds everything. Backing up means copying that file.
@@ -57,6 +57,10 @@ M2: a scheduler calls /cron/notify every ~5 min → pywebpush → Apple push ser
   - Passwords are stored hashed (werkzeug, which ships with Dash).
   - The login cookie is signed and lasts a year, so you stay logged in on your phone.
   - There's no sign-up page: logins are created on the server with `python db.py adduser NAME`.
+  - Brute-force brake: after 10 wrong passwords in 15 minutes the login form refuses everyone until the window passes (`test_login.py`). One global count, because behind Railway's proxy every visitor has the same address.
+  - The widget and backup links carry a per-person key derived from `SECRET_KEY` (HMAC); they work without a password, so keep them private.
+  - The server runs with debug mode off (see the start command in README.md).
+  - Security review, 24 Nov 2026: no secrets in the git history, no known vulnerabilities in the pinned packages (pip-audit), SQL is parameterised, every callback takes the user from the session. Open items are in section 12.
 - **Sync between phones:** the screen refreshes after every action and every 60 seconds. That's plenty for two people.
 
 ---
@@ -139,7 +143,8 @@ Later:
   - a `manifest.json` and a small service worker (`sw.js`), served from the root so they cover the whole app;
   - VAPID keys;
   - `pywebpush` on the server.
-- **Trigger:** a protected `/cron/notify?key=…` route that the host's scheduler (or a free external cron service) calls every ~5 minutes. It finds chores where the due date plus `notify_time` (or the default time) has passed and `last_notified` isn't today's due date, sends the push, then records it.
+- **Trigger:** every ~5 minutes, find chores where the due date plus `notify_time` (or the default time) has passed and `last_notified` isn't today's due date, send the push, then record it. Railway has no outbound restrictions, so web push works there. The simplest trigger is a background thread inside the app (it's one process), so no cron service is needed. If it ever runs as several processes, switch to a protected `/cron/notify?key=…` route called by Railway's cron or cron-job.org.
+- **Lighter alternative (D14):** no web push at all. An iPhone Shortcuts automation at 09:00 fetches `/api/widget` (it already returns `due`, `overdue` and `headline`) and runs *Show Notification* when something is due. No code and no new package, but only at fixed times, no per-chore times, and the notification comes from Shortcuts. Apple doesn't charge for either route: web push doesn't need the Apple Developer Program.
 - **Who gets the notification:** the assignee for `fixed` and `rotate` chores; both of you for `anyone` chores.
 - **Login inside the installed app:** the password form works there. (Magic links wouldn't, because they open in Safari, which has separate storage.)
 
@@ -182,19 +187,21 @@ Later:
 | D7 | Streak | **Consecutive days with none of *your* chores overdue** |
 | D8 | Skip passes the turn? | **No** |
 | D9 | Language | **English** |
-| D10 | Code location | **`chores-app/` on this branch**, to move to its own repo later (self-contained, so it's a plain copy) |
+| D10 | Code location | **`chores-app/` on this branch** for now; moving it to its own repo is D15 |
 | D11 | Tests | **`test_schedule.py`** (plain asserts; also runs under pytest) |
-| D4 | Hosting | **PythonAnywhere**, free tier to start. Steps in README.md. The paid tier (~$5/mo) if web push (M2) needs unrestricted outbound internet. |
+| D4 | Hosting | **Railway**, EU West, Hobby plan ($5/mo incl. $5 usage) after the trial (24 Nov 2026). PythonAnywhere was the first pick, but since Jan 2026 its free plan has no scheduled tasks for new accounts and restricts outbound internet, and its paid plan is $10/mo. Railway gives git-push deploys, a volume for SQLite, a web console, an EU region and open outbound internet for web push. Setup in README.md. |
 | D12 | Widget | **Scriptable** (free iOS app) reading `/api/widget?key=…`. Web apps can't have native widgets. |
-| D13 | iCloud | **Nightly backups only**, via an iPhone Shortcuts automation. iCloud can't be a web app's database. |
+| D13 | iCloud | **Nightly backups only**, via an iPhone Shortcuts automation (the only backup since the move to Railway). iCloud can't be a web app's database. |
 
-**Packages:** `dash`, `dash-mantine-components`, and `pywebpush` from M2. Everything else is the standard library: `sqlite3`, `zoneinfo`, `calendar`.
+**Packages:** `dash` and `dash-mantine-components`. M2 adds `pywebpush` only if D14 picks web push (it pulls in aiohttp, cryptography, http-ece, py-vapid and requests). Everything else is the standard library: `sqlite3`, `zoneinfo`, `calendar`.
 
 **Still open**
 
 | # | Decision | Notes |
 |---|---|---|
 | D6 | Default notification time | 09:00? |
+| D14 | Notification route | **Shortcuts automation** (no code, fixed time) or **web push** (per-chore times, needs `pywebpush`). Suggested: start with Shortcuts, build web push if per-chore times are missed. |
+| D15 | Own repo | Move `chores-app/` to its own repo, keeping its history (`git subtree split`). Suggested: private. Railway then needs its source switched to the new repo, root directory `/`; variables, volume and address stay. |
 
 ---
 
@@ -205,16 +212,23 @@ Later:
 - Today, Upcoming and History screens; done and skip with double-tap protection.
 - Tests for the schedule logic.
 
-**M0 – Go live (built; deploying is next)**
+**M0 – Go live (live on Railway since 24 Nov 2026)**
 - ✅ Manifest and icon, so it opens full-screen from the home screen.
-- ✅ Daily backups: a PythonAnywhere task (`db.py backup`) and an iPhone Shortcuts automation into iCloud Drive (`/api/backup`).
+- ✅ Deployed on Railway (EU West) with a volume for the database, `SECRET_KEY` and `APP_TZ` set, and both logins created.
+- ✅ Brute-force brake on the login form.
+- ✅ Backup link for an iPhone Shortcuts automation into iCloud Drive (`/api/backup`). `db.py backup FOLDER` still exists for a server-side copy.
 - ✅ Scriptable widget for the home and lock screen (`/api/widget`).
-- ✅ Settings in `.env`; deploy steps in README.md.
-- To do: create the PythonAnywhere account, set `SECRET_KEY` and `APP_TZ`, create both logins, and install it on both iPhones.
+- To do (on the phones): install on both iPhones, add both widgets, set up the nightly backup automation. Pick the Hobby plan before the Railway trial ends.
 
-**M2 – Notifications**
-- Service worker, saving push subscriptions, the `/cron/notify` route, the scheduler.
-- Test on both iPhones.
+**Housekeeping (before building more)**
+- Move to its own private repo (D15) and point Railway at it.
+- Two-factor login on GitHub and Railway: whoever gets into either can read or change the database. Limit Railway's GitHub App to the chores repo (it currently has access to all repos).
+- Try a restore once: backup file → `/data/chores.db` → restart. Check whether Railway's volume **Backups** tab works on the Hobby plan; if it does, turn on scheduled volume backups as a second copy.
+- Then use it for a week or two and note what's annoying. That decides the order of M2–M4.
+
+**M2 – Notifications** (decide D14 and D6 first)
+- Shortcuts route: one automation per phone, nothing to build.
+- Web push route: service worker at the root, VAPID keys, `push_subscriptions` table, an "enable notifications" button in the settings sheet, the 5-minute check, per-chore `notify_time`. Test on both iPhones.
 
 **M3 – Points and streaks**
 - Scores screen, weekly winner, streaks.
@@ -235,7 +249,11 @@ Later:
 
 ## 12. Risks and gotchas
 
-- **Backups:** everything is in one SQLite file. Copy it daily (M0).
+- **Backups:** everything is in one SQLite file. Until the backup automation runs and a restore has been tried, a lost volume means lost data.
+- **Railway trial:** the app goes offline when the trial ends (30 days or $5) unless a plan is picked.
+- **The repo is public** until D15: the code, and the two login names in it, are visible. No secrets are in it.
+- **The backup link returns the whole database,** including password hashes. Keep it private; changing `SECRET_KEY` revokes it.
+- **Werkzeug's built-in server** runs in production. Fine for two users behind Railway's proxy; gunicorn is the upgrade if needed.
 - **iOS push only works from the installed home-screen app.** It won't work from a Safari tab.
 - **Timezone:** set `APP_TZ` on the server. Hosts usually run on UTC, which would shift "today" at night.
 - **Editing a chore's due date** moves `anchor_day` for monthly chores. Past completions are never changed.
